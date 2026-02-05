@@ -34,9 +34,19 @@ async function initDb() {
       email TEXT UNIQUE,
       api_key TEXT UNIQUE,
       created_at TEXT,
-      last_check TEXT
+      last_check TEXT,
+      webhook_url TEXT,
+      last_email_id TEXT
     )
   `);
+  
+  // Migration: add webhook columns if missing
+  try {
+    db.run(`ALTER TABLE agents ADD COLUMN webhook_url TEXT`);
+  } catch (e) { /* column exists */ }
+  try {
+    db.run(`ALTER TABLE agents ADD COLUMN last_email_id TEXT`);
+  } catch (e) { /* column exists */ }
   
   saveDb();
   console.log('Database initialized');

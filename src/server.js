@@ -1,9 +1,10 @@
 const express = require('express');
-const { initDb, getDb } = require('./db');
+const { initDb, getDb, saveDb } = require('./db');
 const { verifyMoltbookKey } = require('./auth');
 const { fetchEmails } = require('./imap');
 const { v4: uuidv4 } = require('uuid');
 const crypto = require('crypto');
+const axios = require('axios');
 
 const app = express();
 app.use(express.json());
@@ -112,9 +113,108 @@ app.get('/api/mailbox', authMiddleware, (req, res) => {
     email: agent.email,
     mailbox_id: agent.mailbox_id,
     moltbook_name: agent.moltbook_name,
-    created_at: agent.created_at
+    created_at: agent.created_at,
+    webhook_url: agent.webhook_url || null
   });
 });
+
+// Set webhook URL
+app.put('/api/mailbox/webhook', authMiddleware, (req, res) => {
+  try {
+    const { agent } = req;
+    const { webhook_url } = req.body;
+    
+    // Validate URL
+    if (webhook_url) {
+      try {
+        new URL(webhook_url);
+      } catch (e) {
+        return res.status(400).json({ error: 'Invalid webhook URL' });
+      }
+    }
+    
+    const db = getDb();
+    db.prepare('UPDATE agents SET webhook_url = ? WHERE id = ?').run(webhook_url || null, agent.id);
+    
+    res.json({
+      success: true,
+      webhook_url: webhook_url || null,
+      message: webhook_url ? 'Webhook registered' : 'Webhook removed'
+    });
+  } catch (err) {
+    console.error('Set webhook error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Delete webhook
+app.delete('/api/mailbox/webhook', authMiddleware, (req, res) => {
+  try {
+    const { agent } = req;
+    const db = getDb();
+    db.prepare('UPDATE agents SET webhook_url = NULL WHERE id = ?').run(agent.id);
+    res.json({ success: true, message: 'Webhook removed' });
+  } catch (err) {
+    console.error('Delete webhook error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Webhook polling service
+async function pollWebhooks() {
+  try {
+    const db = getDb();
+    const agents = db.prepare('SELECT * FROM agents WHERE webhook_url IS NOT NULL').all();
+    
+    for (const agent of agents) {
+      try {
+        const emails = await fetchEmails(agent.mailbox_id, 5);
+        
+        // Find new emails (not seen before)
+        const newEmails = emails.filter(email => {
+          if (!agent.last_email_id) return true;
+          return email.id !== agent.last_email_id && 
+                 new Date(email.received_at) > new Date(agent.last_check || 0);
+        });
+        
+        if (newEmails.length > 0) {
+          // Send webhook for each new email
+          for (const email of newEmails) {
+            try {
+              await axios.post(agent.webhook_url, {
+                event: 'email.received',
+                mailbox_id: agent.mailbox_id,
+                email: {
+                  id: email.id,
+                  from: email.from,
+                  to: email.to,
+                  subject: email.subject,
+                  body: email.body,
+                  received_at: email.received_at
+                }
+              }, {
+                timeout: 10000,
+                headers: { 'Content-Type': 'application/json' }
+              });
+              console.log(`Webhook sent to ${agent.moltbook_name} for email: ${email.subject}`);
+            } catch (webhookErr) {
+              console.error(`Webhook failed for ${agent.moltbook_name}:`, webhookErr.message);
+            }
+          }
+          
+          // Update last seen email
+          const latestEmail = emails[0];
+          db.prepare('UPDATE agents SET last_email_id = ?, last_check = datetime("now") WHERE id = ?')
+            .run(latestEmail.id, agent.id);
+        }
+      } catch (agentErr) {
+        console.error(`Poll error for ${agent.moltbook_name}:`, agentErr.message);
+      }
+    }
+  } catch (err) {
+    console.error('Webhook poll error:', err);
+  }
+}
 
 // Start server
 async function main() {
@@ -124,6 +224,12 @@ async function main() {
     console.log(`Agent Mail API running on port ${PORT}`);
     console.log(`Base email: ${BASE_EMAIL}`);
   });
+  
+  // Start webhook polling (every 30 seconds)
+  console.log('Starting webhook polling service...');
+  setInterval(pollWebhooks, 30000);
+  // Initial poll after 5 seconds
+  setTimeout(pollWebhooks, 5000);
 }
 
 main().catch(console.error);
