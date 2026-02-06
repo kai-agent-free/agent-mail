@@ -201,6 +201,145 @@ app.delete('/api/mailbox/webhook', authMiddleware, (req, res) => {
   }
 });
 
+// ============= EMAIL TEMPLATES =============
+const EMAIL_TEMPLATES = {
+  verification_request: {
+    subject: 'Verification Request from {{agent_name}}',
+    body: `Hello,
+
+I am {{agent_name}}, an AI agent requesting verification access.
+
+Purpose: {{purpose}}
+
+My email: {{agent_email}}
+Timestamp: {{timestamp}}
+
+Please reply to this email to complete verification.
+
+Best regards,
+{{agent_name}}`
+  },
+  introduction: {
+    subject: 'Introduction: {{agent_name}}',
+    body: `Hello,
+
+I am {{agent_name}}, an AI agent.
+
+{{message}}
+
+You can reach me at: {{agent_email}}
+
+Best regards,
+{{agent_name}}`
+  },
+  follow_up: {
+    subject: 'Follow-up: {{subject}}',
+    body: `Hello,
+
+This is a follow-up regarding: {{subject}}
+
+{{message}}
+
+Best regards,
+{{agent_name}}`
+  }
+};
+
+// List available templates
+app.get('/api/templates', (req, res) => {
+  const templates = Object.keys(EMAIL_TEMPLATES).map(id => ({
+    id,
+    subject: EMAIL_TEMPLATES[id].subject,
+    variables: extractTemplateVars(EMAIL_TEMPLATES[id].body + EMAIL_TEMPLATES[id].subject)
+  }));
+  res.json({ templates });
+});
+
+// Extract {{variable}} placeholders from template
+function extractTemplateVars(text) {
+  const matches = text.match(/\{\{(\w+)\}\}/g) || [];
+  return [...new Set(matches.map(m => m.slice(2, -2)))];
+}
+
+// Fill template with variables
+function fillTemplate(template, vars) {
+  let subject = template.subject;
+  let body = template.body;
+  
+  for (const [key, value] of Object.entries(vars)) {
+    const regex = new RegExp(`\\{\\{${key}\\}\\}`, 'g');
+    subject = subject.replace(regex, value);
+    body = body.replace(regex, value);
+  }
+  
+  return { subject, body };
+}
+
+// Send email using template
+app.post('/api/mailbox/send-template', authMiddleware, async (req, res) => {
+  try {
+    const { agent } = req;
+    const { to, template_id, variables } = req.body;
+    
+    if (!to || !template_id) {
+      return res.status(400).json({ 
+        error: 'Missing required fields: to, template_id' 
+      });
+    }
+    
+    const template = EMAIL_TEMPLATES[template_id];
+    if (!template) {
+      return res.status(400).json({ 
+        error: 'Unknown template',
+        available: Object.keys(EMAIL_TEMPLATES)
+      });
+    }
+    
+    // Auto-fill agent variables
+    const vars = {
+      agent_name: agent.moltbook_name || 'AI Agent',
+      agent_email: agent.email,
+      timestamp: new Date().toISOString(),
+      ...variables
+    };
+    
+    const { subject, body } = fillTemplate(template, vars);
+    
+    // Use existing send logic
+    const db = getDb();
+    const today = new Date().toISOString().slice(0, 10);
+    const sendCount = agent.sends_today || 0;
+    const lastSendDate = agent.last_send_date;
+    const currentSends = (lastSendDate === today) ? sendCount : 0;
+    
+    if (currentSends >= 10) {
+      return res.status(429).json({ 
+        error: 'Daily send limit reached (10 emails/day)',
+        resets_at: `${today}T23:59:59Z`
+      });
+    }
+    
+    const result = await sendEmail(agent.mailbox_id, { to, subject, body });
+    
+    db.prepare(`
+      UPDATE agents 
+      SET sends_today = ?, last_send_date = ? 
+      WHERE id = ?
+    `).run(currentSends + 1, today, agent.id);
+    
+    res.json({
+      success: true,
+      message: 'Template email sent',
+      template_used: template_id,
+      ...result,
+      sends_remaining: 10 - (currentSends + 1)
+    });
+  } catch (err) {
+    console.error('Send template error:', err);
+    res.status(500).json({ error: 'Failed to send email: ' + err.message });
+  }
+});
+
 // Send email
 app.post('/api/mailbox/send', authMiddleware, async (req, res) => {
   try {
