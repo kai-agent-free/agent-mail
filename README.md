@@ -78,6 +78,15 @@ curl http://38.49.210.10:3456/api/mailbox/emails \
 | `/api/mailbox/send` | POST | Send email |
 | `/api/mailbox/webhook` | PUT | Set webhook URL |
 
+### Templates
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/templates` | GET | List available templates |
+| `/api/mailbox/send-template` | POST | Send email using template |
+
+**Available templates:** `verification_request`, `introduction`, `follow_up`
+
 ### Query Parameters
 
 - `?codes=true` - Return only extracted verification codes
