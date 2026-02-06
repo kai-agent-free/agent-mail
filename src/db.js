@@ -40,12 +40,36 @@ async function initDb() {
     )
   `);
   
+  // Create payments table for Solana Pay
+  db.run(`
+    CREATE TABLE IF NOT EXISTS payments (
+      reference TEXT PRIMARY KEY,
+      type TEXT,
+      agent_id TEXT,
+      amount REAL,
+      status TEXT DEFAULT 'pending',
+      signature TEXT,
+      created_at TEXT,
+      confirmed_at TEXT,
+      used INTEGER DEFAULT 0
+    )
+  `);
+  
   // Migration: add webhook columns if missing
   try {
     db.run(`ALTER TABLE agents ADD COLUMN webhook_url TEXT`);
   } catch (e) { /* column exists */ }
   try {
     db.run(`ALTER TABLE agents ADD COLUMN last_email_id TEXT`);
+  } catch (e) { /* column exists */ }
+  try {
+    db.run(`ALTER TABLE agents ADD COLUMN sends_today INTEGER DEFAULT 0`);
+  } catch (e) { /* column exists */ }
+  try {
+    db.run(`ALTER TABLE agents ADD COLUMN last_send_date TEXT`);
+  } catch (e) { /* column exists */ }
+  try {
+    db.run(`ALTER TABLE agents ADD COLUMN paid INTEGER DEFAULT 0`);
   } catch (e) { /* column exists */ }
   
   saveDb();

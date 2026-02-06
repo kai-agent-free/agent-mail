@@ -2,12 +2,19 @@ const express = require('express');
 const { initDb, getDb, saveDb } = require('./db');
 const { verifyMoltbookKey } = require('./auth');
 const { fetchEmails } = require('./imap');
+const { sendEmail, verifySmtp } = require('./smtp');
 const { v4: uuidv4 } = require('uuid');
 const crypto = require('crypto');
 const axios = require('axios');
 
+const path = require('path');
 const app = express();
 app.use(express.json());
+
+// Serve landing page
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'landing', 'index.html'));
+});
 
 const PORT = process.env.PORT || 3456;
 const BASE_EMAIL = 'kai@kdn.agency';
@@ -91,15 +98,49 @@ app.post('/api/mailbox/create', async (req, res) => {
   }
 });
 
+// Extract verification codes from text
+function extractCodes(text) {
+  if (!text) return [];
+  const patterns = [
+    /\b(\d{4,8})\b/g,                          // 4-8 digit codes
+    /code[:\s]+(\w{4,10})/gi,                  // "code: XXXX"
+    /verification[:\s]+(\w{4,10})/gi,          // "verification: XXXX"
+    /OTP[:\s]+(\d{4,8})/gi,                    // "OTP: XXXX"
+    /pin[:\s]+(\d{4,8})/gi,                    // "PIN: XXXX"
+  ];
+  
+  const codes = new Set();
+  for (const pattern of patterns) {
+    const matches = text.matchAll(pattern);
+    for (const match of matches) {
+      codes.add(match[1]);
+    }
+  }
+  return [...codes];
+}
+
 // Get emails
 app.get('/api/mailbox/emails', authMiddleware, async (req, res) => {
   try {
     const { agent } = req;
     const limit = parseInt(req.query.limit) || 10;
+    const codesOnly = req.query.codes === 'true';
     
     const emails = await fetchEmails(agent.mailbox_id, limit);
     
-    res.json({ emails });
+    // Add extracted codes to each email
+    const enrichedEmails = emails.map(email => ({
+      ...email,
+      codes: extractCodes(email.body + ' ' + email.subject)
+    }));
+    
+    if (codesOnly) {
+      // Return only codes from latest email
+      const latestCodes = enrichedEmails[0]?.codes || [];
+      return res.json({ codes: latestCodes });
+    }
+    
+    res.json({ emails: enrichedEmails });
   } catch (err) {
     console.error('Fetch emails error:', err);
     res.status(500).json({ error: 'Failed to fetch emails' });
@@ -160,6 +201,56 @@ app.delete('/api/mailbox/webhook', authMiddleware, (req, res) => {
   }
 });
 
+// Send email
+app.post('/api/mailbox/send', authMiddleware, async (req, res) => {
+  try {
+    const { agent } = req;
+    const { to, subject, body, html } = req.body;
+    
+    if (!to || !subject || !body) {
+      return res.status(400).json({ 
+        error: 'Missing required fields: to, subject, body' 
+      });
+    }
+    
+    // Rate limiting: track sends per agent
+    const db = getDb();
+    const today = new Date().toISOString().slice(0, 10);
+    const sendCount = agent.sends_today || 0;
+    const lastSendDate = agent.last_send_date;
+    
+    // Reset counter if new day
+    const currentSends = (lastSendDate === today) ? sendCount : 0;
+    
+    // Limit: 10 emails per day per agent (MVP)
+    if (currentSends >= 10) {
+      return res.status(429).json({ 
+        error: 'Daily send limit reached (10 emails/day)',
+        resets_at: `${today}T23:59:59Z`
+      });
+    }
+    
+    const result = await sendEmail(agent.mailbox_id, { to, subject, body, html });
+    
+    // Update send counter
+    db.prepare(`
+      UPDATE agents 
+      SET sends_today = ?, last_send_date = ? 
+      WHERE id = ?
+    `).run(currentSends + 1, today, agent.id);
+    
+    res.json({
+      success: true,
+      message: 'Email sent',
+      ...result,
+      sends_remaining: 10 - (currentSends + 1)
+    });
+  } catch (err) {
+    console.error('Send email error:', err);
+    res.status(500).json({ error: 'Failed to send email: ' + err.message });
+  }
+});
+
 // Webhook polling service
 async function pollWebhooks() {
   try {
@@ -216,6 +307,124 @@ async function pollWebhooks() {
   }
 }
 
+// ============= SOLANA PAY INTEGRATION =============
+const solanaPay = require('./solana-pay');
+
+// Get pricing info
+app.get('/api/pay/prices', (req, res) => {
+  res.json({
+    prices: solanaPay.PRICES,
+    currency: 'USDC',
+    network: 'solana',
+    recipient: solanaPay.RECIPIENT,
+  });
+});
+
+// Create payment request
+app.post('/api/pay/request', (req, res) => {
+  try {
+    const { type, agent_id } = req.body;
+    
+    if (!type) {
+      return res.status(400).json({ error: 'Payment type required' });
+    }
+    
+    const agentId = agent_id || 'anonymous';
+    const payment = solanaPay.createPaymentRequest(type, agentId);
+    
+    // Store payment request for tracking
+    const db = getDb();
+    db.prepare(`
+      INSERT INTO payments (reference, type, agent_id, amount, status, created_at)
+      VALUES (?, ?, ?, ?, 'pending', datetime('now'))
+    `).run(payment.reference, type, agentId, payment.amount);
+    
+    res.json(payment);
+  } catch (err) {
+    console.error('Create payment error:', err);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Check payment status
+app.get('/api/pay/status/:reference', async (req, res) => {
+  try {
+    const { reference } = req.params;
+    
+    // Check on-chain
+    const status = await solanaPay.verifyPayment(reference);
+    
+    // Update DB if confirmed
+    if (status.verified) {
+      const db = getDb();
+      db.prepare(`
+        UPDATE payments 
+        SET status = 'confirmed', signature = ?, confirmed_at = datetime('now')
+        WHERE reference = ?
+      `).run(status.signature, reference);
+    }
+    
+    res.json(status);
+  } catch (err) {
+    console.error('Payment status error:', err);
+    res.status(500).json({ error: 'Failed to check payment status' });
+  }
+});
+
+// Create paid mailbox (after payment confirmed)
+app.post('/api/mailbox/create-paid', async (req, res) => {
+  try {
+    const { reference, agent_name } = req.body;
+    
+    if (!reference) {
+      return res.status(400).json({ error: 'Payment reference required' });
+    }
+    
+    // Verify payment
+    const status = await solanaPay.verifyPayment(reference);
+    if (!status.verified) {
+      return res.status(402).json({ 
+        error: 'Payment not confirmed', 
+        status: status.status 
+      });
+    }
+    
+    const db = getDb();
+    
+    // Check if payment was already used
+    const payment = db.prepare('SELECT * FROM payments WHERE reference = ?').get(reference);
+    if (payment?.used) {
+      return res.status(400).json({ error: 'Payment already used' });
+    }
+    
+    // Create mailbox
+    const mailboxId = uuidv4().slice(0, 8);
+    const email = `kai+${mailboxId}@kdn.agency`;
+    const apiKey = generateApiKey();
+    const name = agent_name || `solana-${mailboxId}`;
+    
+    db.prepare(`
+      INSERT INTO agents (id, moltbook_id, moltbook_name, mailbox_id, email, api_key, created_at, paid)
+      VALUES (?, ?, ?, ?, ?, ?, datetime('now'), 1)
+    `).run(uuidv4(), `solana-${reference.slice(0,8)}`, name, mailboxId, email, apiKey);
+    
+    // Mark payment as used
+    db.prepare('UPDATE payments SET used = 1 WHERE reference = ?').run(reference);
+    
+    res.json({
+      email,
+      mailbox_id: mailboxId,
+      api_key: apiKey,
+      paid: true,
+      payment_signature: status.signature,
+      message: 'Paid mailbox created successfully'
+    });
+  } catch (err) {
+    console.error('Create paid mailbox error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Start server
 async function main() {
   await initDb();
@@ -223,6 +432,7 @@ async function main() {
   app.listen(PORT, () => {
     console.log(`Agent Mail API running on port ${PORT}`);
     console.log(`Base email: ${BASE_EMAIL}`);
+    console.log(`Solana Pay enabled - recipient: ${solanaPay.RECIPIENT}`);
   });
   
   // Start webhook polling (every 30 seconds)
