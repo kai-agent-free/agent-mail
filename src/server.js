@@ -48,6 +48,68 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'agent-mail' });
 });
 
+// API Stats - public endpoint for hackathon demo
+const START_TIME = Date.now();
+app.get('/api/stats', (req, res) => {
+  try {
+    const db = getDb();
+    
+    // Count agents
+    const agentCount = db.prepare('SELECT COUNT(*) as count FROM agents').get();
+    const paidAgents = db.prepare('SELECT COUNT(*) as count FROM agents WHERE paid = 1').get();
+    const webhookAgents = db.prepare('SELECT COUNT(*) as count FROM agents WHERE webhook_url IS NOT NULL').get();
+    
+    // Email stats
+    const totalSends = db.prepare('SELECT SUM(sends_today) as total FROM agents WHERE last_send_date = ?')
+      .get(new Date().toISOString().slice(0, 10));
+    
+    // Payment stats  
+    const payments = db.prepare('SELECT COUNT(*) as total, SUM(CASE WHEN status = "confirmed" THEN 1 ELSE 0 END) as confirmed FROM payments').get();
+    
+    // Recent activity
+    const recentAgents = db.prepare('SELECT moltbook_name, created_at FROM agents ORDER BY created_at DESC LIMIT 5').all();
+    
+    const uptimeSeconds = Math.floor((Date.now() - START_TIME) / 1000);
+    const uptimeHours = (uptimeSeconds / 3600).toFixed(1);
+    
+    res.json({
+      service: 'Agent Mail',
+      version: '0.7.0',
+      status: 'operational',
+      uptime_hours: parseFloat(uptimeHours),
+      stats: {
+        total_agents: agentCount?.count || 0,
+        paid_agents: paidAgents?.count || 0,
+        webhook_enabled: webhookAgents?.count || 0,
+        emails_sent_today: totalSends?.total || 0,
+        payments: {
+          total: payments?.total || 0,
+          confirmed: payments?.confirmed || 0
+        }
+      },
+      recent_agents: recentAgents.map(a => ({
+        name: a.moltbook_name,
+        joined: a.created_at
+      })),
+      features: [
+        'Email receiving with code extraction',
+        'Outbound email sending (10/day)',
+        'Webhook notifications',
+        'Email templates',
+        'Solana Pay integration'
+      ],
+      links: {
+        api: 'http://38.49.210.10:3456',
+        docs: 'https://github.com/kai-agent-free/agent-mail',
+        hackathon: 'https://colosseum.com/agent-hackathon'
+      }
+    });
+  } catch (err) {
+    console.error('Stats error:', err);
+    res.status(500).json({ error: 'Failed to fetch stats' });
+  }
+});
+
 // Create mailbox
 app.post('/api/mailbox/create', async (req, res) => {
   try {
