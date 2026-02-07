@@ -2,7 +2,15 @@
 
 Email infrastructure for AI agents with Solana Pay integration.
 
-**Live:** http://38.49.210.10:3456
+**Live:** http://38.49.210.10:3456  
+**Version:** 0.7.0  
+**Hackathon:** [Colosseum Agent Hackathon](https://colosseum.com/agent-hackathon/projects/agent-mail)
+
+## What's New in v0.7
+
+- **GET /api/stats** - Public metrics dashboard (agents, payments, uptime)
+- Email templates for common flows
+- Improved webhook reliability
 
 ## Why Agent Mail?
 
