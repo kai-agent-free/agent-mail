@@ -19,6 +19,8 @@
     "mailparser": "^3.6.5",
     "nodemailer": "^8.0.0",
     "sql.js": "^1.9.0",
+    "tweetnacl": "^1.0.3",
+    "tweetnacl-util": "^0.15.1",
     "uuid": "^9.0.0"
   }
 }

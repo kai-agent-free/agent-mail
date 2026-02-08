@@ -72,6 +72,14 @@ async function initDb() {
     db.run(`ALTER TABLE agents ADD COLUMN paid INTEGER DEFAULT 0`);
   } catch (e) { /* column exists */ }
   
+  // v0.8: Encryption support
+  try {
+    db.run(`ALTER TABLE agents ADD COLUMN public_key TEXT`);
+  } catch (e) { /* column exists */ }
+  try {
+    db.run(`ALTER TABLE agents ADD COLUMN encryption_enabled INTEGER DEFAULT 0`);
+  } catch (e) { /* column exists */ }
+  
   saveDb();
   console.log('Database initialized');
   return db;

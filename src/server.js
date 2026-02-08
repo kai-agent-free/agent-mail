@@ -6,6 +6,7 @@ const { sendEmail, verifySmtp } = require('./smtp');
 const { v4: uuidv4 } = require('uuid');
 const crypto = require('crypto');
 const axios = require('axios');
+const agentCrypto = require('./crypto');
 
 const path = require('path');
 const app = express();
@@ -53,7 +54,7 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'healthy', 
     service: 'agent-mail',
-    version: '0.7.1',
+    version: '0.8.0',
     timestamp: new Date().toISOString()
   });
 });
@@ -68,6 +69,7 @@ app.get('/api/stats', (req, res) => {
     const agentCount = db.prepare('SELECT COUNT(*) as count FROM agents').get();
     const paidAgents = db.prepare('SELECT COUNT(*) as count FROM agents WHERE paid = 1').get();
     const webhookAgents = db.prepare('SELECT COUNT(*) as count FROM agents WHERE webhook_url IS NOT NULL').get();
+    const encryptedAgents = db.prepare('SELECT COUNT(*) as count FROM agents WHERE encryption_enabled = 1').get();
     
     // Email stats
     const totalSends = db.prepare('SELECT SUM(sends_today) as total FROM agents WHERE last_send_date = ?')
@@ -84,7 +86,7 @@ app.get('/api/stats', (req, res) => {
     
     res.json({
       service: 'Agent Mail',
-      version: '0.7.1',
+      version: '0.8.0',
       status: 'operational',
       uptime_hours: parseFloat(uptimeHours),
       stats: {
@@ -106,7 +108,8 @@ app.get('/api/stats', (req, res) => {
         'Outbound email sending (10/day)',
         'Webhook notifications',
         'Email templates',
-        'Solana Pay integration'
+        'Solana Pay integration',
+        'End-to-end encryption (v0.8)'
       ],
       links: {
         api: 'http://38.49.210.10:3456',
@@ -212,7 +215,38 @@ app.get('/api/mailbox/emails', authMiddleware, async (req, res) => {
       return res.json({ codes: latestCodes });
     }
     
-    res.json({ emails: enrichedEmails });
+    // v0.8: Encrypt emails if agent has encryption enabled
+    if (agent.encryption_enabled && agent.public_key) {
+      const encryptedEmails = enrichedEmails.map(email => {
+        try {
+          const encryptedBody = agentCrypto.encryptForAgent(email.body, agent.public_key);
+          return {
+            id: email.id,
+            from: email.from,
+            to: email.to,
+            subject: email.subject,
+            received_at: email.received_at,
+            // Encrypted content
+            encrypted: true,
+            body: encryptedBody.encrypted,
+            nonce: encryptedBody.nonce,
+            serverPublicKey: encryptedBody.serverPublicKey,
+            // Codes still extracted (they're in subject too)
+            codes: email.codes
+          };
+        } catch (encErr) {
+          console.error('Email encryption error:', encErr);
+          return { ...email, encrypted: false, encryption_error: encErr.message };
+        }
+      });
+      return res.json({ 
+        emails: encryptedEmails,
+        encrypted: true,
+        algorithm: 'x25519-xsalsa20-poly1305'
+      });
+    }
+    
+    res.json({ emails: enrichedEmails, encrypted: false });
   } catch (err) {
     console.error('Fetch emails error:', err);
     res.status(500).json({ error: 'Failed to fetch emails' });
@@ -227,7 +261,11 @@ app.get('/api/mailbox', authMiddleware, (req, res) => {
     mailbox_id: agent.mailbox_id,
     moltbook_name: agent.moltbook_name,
     created_at: agent.created_at,
-    webhook_url: agent.webhook_url || null
+    webhook_url: agent.webhook_url || null,
+    encryption: {
+      enabled: !!agent.encryption_enabled,
+      public_key: agent.public_key || null
+    }
   });
 });
 
@@ -269,6 +307,132 @@ app.delete('/api/mailbox/webhook', authMiddleware, (req, res) => {
     res.json({ success: true, message: 'Webhook removed' });
   } catch (err) {
     console.error('Delete webhook error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ============= ENCRYPTION (v0.8) =============
+
+// Generate a new keypair for agent
+app.post('/api/encryption/keypair', authMiddleware, (req, res) => {
+  try {
+    const keyPair = agentCrypto.generateKeyPair();
+    res.json({
+      publicKey: keyPair.publicKey,
+      secretKey: keyPair.secretKey,
+      algorithm: 'x25519-xsalsa20-poly1305',
+      message: 'Store secretKey securely! It cannot be recovered.'
+    });
+  } catch (err) {
+    console.error('Generate keypair error:', err);
+    res.status(500).json({ error: 'Failed to generate keypair' });
+  }
+});
+
+// Register/update public key for encryption
+app.put('/api/encryption/key', authMiddleware, (req, res) => {
+  try {
+    const { agent } = req;
+    const { public_key } = req.body;
+    
+    if (!public_key) {
+      return res.status(400).json({ error: 'public_key is required' });
+    }
+    
+    // Validate public key format
+    if (!agentCrypto.isValidPublicKey(public_key)) {
+      return res.status(400).json({ 
+        error: 'Invalid public key format. Expected 32-byte base64-encoded x25519 public key.'
+      });
+    }
+    
+    const db = getDb();
+    db.prepare('UPDATE agents SET public_key = ?, encryption_enabled = 1 WHERE id = ?')
+      .run(public_key, agent.id);
+    
+    res.json({
+      success: true,
+      encryption_enabled: true,
+      public_key: public_key,
+      message: 'Encryption enabled. All incoming emails will be encrypted.'
+    });
+  } catch (err) {
+    console.error('Set public key error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get encryption status
+app.get('/api/encryption/status', authMiddleware, (req, res) => {
+  const { agent } = req;
+  res.json({
+    encryption_enabled: !!agent.encryption_enabled,
+    public_key: agent.public_key || null,
+    algorithm: 'x25519-xsalsa20-poly1305',
+    server_public_key: require('tweetnacl-util').encodeBase64(agentCrypto.getServerKeyPair().publicKey)
+  });
+});
+
+// Disable encryption
+app.delete('/api/encryption/key', authMiddleware, (req, res) => {
+  try {
+    const { agent } = req;
+    const db = getDb();
+    db.prepare('UPDATE agents SET public_key = NULL, encryption_enabled = 0 WHERE id = ?')
+      .run(agent.id);
+    
+    res.json({
+      success: true,
+      encryption_enabled: false,
+      message: 'Encryption disabled. Emails will be stored in plaintext.'
+    });
+  } catch (err) {
+    console.error('Disable encryption error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Set pubkey by mailbox_id (alternative endpoint per spec)
+app.post('/api/agents/:id/set-pubkey', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { public_key, api_key } = req.body;
+    
+    if (!public_key) {
+      return res.status(400).json({ error: 'public_key is required' });
+    }
+    
+    if (!api_key) {
+      return res.status(401).json({ error: 'api_key is required for authentication' });
+    }
+    
+    // Validate public key format
+    if (!agentCrypto.isValidPublicKey(public_key)) {
+      return res.status(400).json({ 
+        error: 'Invalid public key format. Expected 32-byte base64-encoded x25519 public key.'
+      });
+    }
+    
+    const db = getDb();
+    const agent = db.prepare('SELECT * FROM agents WHERE mailbox_id = ? AND api_key = ?').get(id, api_key);
+    
+    if (!agent) {
+      return res.status(404).json({ error: 'Agent not found or invalid api_key' });
+    }
+    
+    db.prepare('UPDATE agents SET public_key = ?, encryption_enabled = 1 WHERE id = ?')
+      .run(public_key, agent.id);
+    
+    res.json({
+      success: true,
+      mailbox_id: id,
+      encryption_enabled: true,
+      public_key: public_key,
+      server_public_key: require('tweetnacl-util').encodeBase64(agentCrypto.getServerKeyPair().publicKey),
+      message: 'Encryption enabled. All incoming emails will be encrypted.'
+    });
+  } catch (err) {
+    console.error('Set pubkey error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -483,22 +647,47 @@ async function pollWebhooks() {
           // Send webhook for each new email
           for (const email of newEmails) {
             try {
-              await axios.post(agent.webhook_url, {
-                event: 'email.received',
-                mailbox_id: agent.mailbox_id,
-                email: {
+              let emailPayload;
+              
+              // v0.8: Encrypt email body if agent has encryption enabled
+              if (agent.encryption_enabled && agent.public_key) {
+                const encryptedBody = agentCrypto.encryptForAgent(email.body, agent.public_key);
+                emailPayload = {
+                  id: email.id,
+                  from: email.from,
+                  to: email.to,
+                  subject: email.subject,
+                  received_at: email.received_at,
+                  encrypted: true,
+                  body: encryptedBody.encrypted,
+                  nonce: encryptedBody.nonce,
+                  serverPublicKey: encryptedBody.serverPublicKey
+                };
+              } else {
+                emailPayload = {
                   id: email.id,
                   from: email.from,
                   to: email.to,
                   subject: email.subject,
                   body: email.body,
-                  received_at: email.received_at
-                }
+                  received_at: email.received_at,
+                  encrypted: false
+                };
+              }
+              
+              await axios.post(agent.webhook_url, {
+                event: 'email.received',
+                mailbox_id: agent.mailbox_id,
+                email: emailPayload,
+                encryption: agent.encryption_enabled ? {
+                  enabled: true,
+                  algorithm: 'x25519-xsalsa20-poly1305'
+                } : { enabled: false }
               }, {
                 timeout: 10000,
                 headers: { 'Content-Type': 'application/json' }
               });
-              console.log(`Webhook sent to ${agent.moltbook_name} for email: ${email.subject}`);
+              console.log(`Webhook sent to ${agent.moltbook_name} for email: ${email.subject}${agent.encryption_enabled ? ' (encrypted)' : ''}`);
             } catch (webhookErr) {
               console.error(`Webhook failed for ${agent.moltbook_name}:`, webhookErr.message);
             }
