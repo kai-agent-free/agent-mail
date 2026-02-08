@@ -829,8 +829,10 @@ app.post('/api/mailbox/create-paid', async (req, res) => {
 async function main() {
   await initDb();
   
-  app.listen(PORT, () => {
-    console.log(`Agent Mail API running on port ${PORT}`);
+  // Listen on localhost only (Cloudflare Tunnel will proxy)
+  const HOST = process.env.HOST || '127.0.0.1';
+  app.listen(PORT, HOST, () => {
+    console.log(`Agent Mail API running on ${HOST}:${PORT}`);
     console.log(`Base email: ${BASE_EMAIL}`);
     console.log(`Solana Pay enabled - recipient: ${solanaPay.RECIPIENT}`);
   });

@@ -18,7 +18,8 @@ async function fetchEmails(mailboxId, limit = 10) {
   return new Promise((resolve, reject) => {
     const imap = new Imap(IMAP_CONFIG);
     const emails = [];
-    const targetAddress = `kai+${mailboxId}@kdn.agency`;
+    const targetAddress = `kai+${mailboxId}@kdn.agency`.toLowerCase();
+    const parsePromises = [];
     
     imap.once('ready', () => {
       imap.openBox('INBOX', true, (err, box) => {
@@ -27,9 +28,6 @@ async function fetchEmails(mailboxId, limit = 10) {
           return reject(err);
         }
         
-        // Search for emails to this subaddress
-        // Note: Some servers support HEADER search, others don't
-        // Fallback: fetch recent and filter
         imap.search(['ALL'], (err, results) => {
           if (err) {
             imap.end();
@@ -55,30 +53,30 @@ async function fetchEmails(mailboxId, limit = 10) {
               stream.on('data', (chunk) => {
                 buffer += chunk.toString('utf8');
               });
-              stream.once('end', async () => {
-                try {
-                  const parsed = await simpleParser(buffer);
-                  
-                  // Check if email is for this mailbox
-                  const toAddresses = parsed.to?.value || [];
-                  const isForMailbox = toAddresses.some(addr => 
-                    addr.address?.toLowerCase() === targetAddress.toLowerCase()
-                  );
-                  
-                  if (isForMailbox) {
-                    emails.push({
-                      id: parsed.messageId || `msg-${seqno}`,
-                      from: parsed.from?.text || 'unknown',
-                      to: parsed.to?.text || '',
-                      subject: parsed.subject || '(no subject)',
-                      body: parsed.text || parsed.html || '',
-                      html: parsed.html || null,
-                      received_at: parsed.date?.toISOString() || new Date().toISOString()
-                    });
-                  }
-                } catch (parseErr) {
-                  console.error('Parse error:', parseErr);
-                }
+              stream.once('end', () => {
+                // Create a promise for each email parse
+                const parsePromise = simpleParser(buffer)
+                  .then(parsed => {
+                    const toAddresses = parsed.to?.value || [];
+                    const isForMailbox = toAddresses.some(addr => 
+                      addr.address?.toLowerCase() === targetAddress
+                    );
+                    
+                    if (isForMailbox) {
+                      emails.push({
+                        id: parsed.messageId || `msg-${seqno}`,
+                        from: parsed.from?.text || 'unknown',
+                        to: parsed.to?.text || '',
+                        subject: parsed.subject || '(no subject)',
+                        body: parsed.text || parsed.html || '',
+                        html: parsed.html || null,
+                        received_at: parsed.date?.toISOString() || new Date().toISOString()
+                      });
+                    }
+                  })
+                  .catch(err => console.error('Parse error:', err));
+                
+                parsePromises.push(parsePromise);
               });
             });
           });
@@ -88,12 +86,15 @@ async function fetchEmails(mailboxId, limit = 10) {
           });
           
           f.once('end', () => {
-            imap.end();
-            // Return most recent first, limited
-            const sorted = emails.sort((a, b) => 
-              new Date(b.received_at) - new Date(a.received_at)
-            );
-            resolve(sorted.slice(0, limit));
+            // Wait for all parsing to complete before resolving
+            Promise.all(parsePromises).then(() => {
+              imap.end();
+              // Return most recent first, limited
+              const sorted = emails.sort((a, b) => 
+                new Date(b.received_at) - new Date(a.received_at)
+              );
+              resolve(sorted.slice(0, limit));
+            });
           });
         });
       });
