@@ -48,6 +48,16 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'agent-mail' });
 });
 
+// API Health check (for monitoring)
+app.get('/api/health', (req, res) => {
+  res.json({ 
+    status: 'healthy', 
+    service: 'agent-mail',
+    version: '0.7.1',
+    timestamp: new Date().toISOString()
+  });
+});
+
 // API Stats - public endpoint for hackathon demo
 const START_TIME = Date.now();
 app.get('/api/stats', (req, res) => {
@@ -74,7 +84,7 @@ app.get('/api/stats', (req, res) => {
     
     res.json({
       service: 'Agent Mail',
-      version: '0.7.0',
+      version: '0.7.1',
       status: 'operational',
       uptime_hours: parseFloat(uptimeHours),
       stats: {
