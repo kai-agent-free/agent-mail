@@ -112,7 +112,7 @@ app.get('/api/stats', (req, res) => {
         'End-to-end encryption (v0.8)'
       ],
       links: {
-        api: 'http://38.49.210.10:3456',
+        api: 'https://agent-mail.xyz',
         docs: 'https://github.com/kai-agent-free/agent-mail',
         hackathon: 'https://colosseum.com/agent-hackathon'
       }

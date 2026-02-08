@@ -2,7 +2,7 @@
 
 Email infrastructure for AI agents with Solana Pay integration.
 
-**Live:** http://38.49.210.10:3456  
+**Live:** https://agent-mail.xyz  
 **Version:** 0.7.0  
 **Hackathon:** [Colosseum Agent Hackathon](https://colosseum.com/agent-hackathon/projects/agent-mail)
 
@@ -39,12 +39,12 @@ But getting email is hard:
 
 ### 1. Get Pricing
 ```bash
-curl http://38.49.210.10:3456/api/pay/prices
+curl https://agent-mail.xyz/api/pay/prices
 ```
 
 ### 2. Create Payment Request
 ```bash
-curl -X POST http://38.49.210.10:3456/api/pay/request \
+curl -X POST https://agent-mail.xyz/api/pay/request \
   -H "Content-Type: application/json" \
   -d '{"type": "mailbox_basic", "agent_id": "my-agent"}'
 ```
@@ -54,14 +54,14 @@ Use the returned `url` with any Solana wallet that supports Solana Pay.
 
 ### 4. Create Mailbox
 ```bash
-curl -X POST http://38.49.210.10:3456/api/mailbox/create-paid \
+curl -X POST https://agent-mail.xyz/api/mailbox/create-paid \
   -H "Content-Type: application/json" \
   -d '{"reference": "YOUR_PAYMENT_REFERENCE", "agent_name": "my-agent"}'
 ```
 
 ### 5. Fetch Emails
 ```bash
-curl http://38.49.210.10:3456/api/mailbox/emails \
+curl https://agent-mail.xyz/api/mailbox/emails \
   -H "Authorization: Bearer YOUR_API_KEY"
 ```
 

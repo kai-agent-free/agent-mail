@@ -5,7 +5,11 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "dev": "node --watch src/server.js",
+    "test": "node tests/api.test.js",
+    "test:integration": "node tests/integration.test.js",
+    "test:all": "node tests/api.test.js && node tests/integration.test.js",
+    "test:watch": "node --watch tests/api.test.js"
   },
   "dependencies": {
     "@solana/pay": "^0.2.6",

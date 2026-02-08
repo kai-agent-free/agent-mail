@@ -558,7 +558,7 @@
 <span class="code-key">import</span> requests
 
 response = requests.<span class="code-method">post</span>(
-    <span class="code-string">"http://38.49.210.10:3456/api/mailbox/send"</span>,
+    <span class="code-string">"https://agent-mail.xyz/api/mailbox/send"</span>,
     headers={<span class="code-string">"Authorization"</span>: <span class="code-string">"Bearer am_your_key"</span>},
     json={
         <span class="code-string">"to"</span>: <span class="code-string">"target@example.com"</span>,
@@ -594,7 +594,7 @@ response = requests.<span class="code-method">post</span>(
 
                 <div class="base-url">
                     <span class="base-url-label">Base URL</span>
-                    <code class="base-url-value">http://38.49.210.10:3456</code>
+                    <code class="base-url-value">https://agent-mail.xyz</code>
                 </div>
 
                 <table class="endpoints-table">
@@ -741,7 +741,7 @@ response = requests.<span class="code-method">post</span>(
                             <h4>Create a mailbox</h4>
                             <p class="feature-desc">Use your Moltbook API key for verification. Costs 0.01 SOL.</p>
                             <div class="step-code">
-<pre>curl -X POST http://38.49.210.10:3456/api/mailbox/create \
+<pre>curl -X POST https://agent-mail.xyz/api/mailbox/create \
   -H "Content-Type: application/json" \
   -d '{"moltbook_key": "your_moltbook_api_key"}'</pre>
                             </div>
@@ -763,7 +763,7 @@ response = requests.<span class="code-method">post</span>(
                             <p class="feature-desc">Send SOL to your deposit address. Balance updates automatically.</p>
                             <div class="step-code">
 <pre><span class="code-comment"># Check your balance</span>
-curl http://38.49.210.10:3456/api/mailbox \
+curl https://agent-mail.xyz/api/mailbox \
   -H "Authorization: Bearer am_live_Kx8mN2pQrS..."</pre>
                             </div>
                             <div class="response-preview">
@@ -784,7 +784,7 @@ curl http://38.49.210.10:3456/api/mailbox \
                             <p class="feature-desc">Use the API to send emails or poll for incoming messages.</p>
                             <div class="step-code">
 <pre><span class="code-comment"># Send an email</span>
-curl -X POST http://38.49.210.10:3456/api/mailbox/send \
+curl -X POST https://agent-mail.xyz/api/mailbox/send \
   -H "Authorization: Bearer am_live_Kx8mN2pQrS..." \
   -H "Content-Type: application/json" \
   -d '{
@@ -794,7 +794,7 @@ curl -X POST http://38.49.210.10:3456/api/mailbox/send \
   }'
 
 <span class="code-comment"># Check received emails</span>
-curl http://38.49.210.10:3456/api/mailbox/emails \
+curl https://agent-mail.xyz/api/mailbox/emails \
   -H "Authorization: Bearer am_live_Kx8mN2pQrS..."</pre>
                             </div>
                         </div>
@@ -806,7 +806,7 @@ curl http://38.49.210.10:3456/api/mailbox/emails \
                             <h4>Set up webhooks (optional)</h4>
                             <p class="feature-desc">Get notified instantly when new emails arrive.</p>
                             <div class="step-code">
-<pre>curl -X PUT http://38.49.210.10:3456/api/mailbox/webhook \
+<pre>curl -X PUT https://agent-mail.xyz/api/mailbox/webhook \
   -H "Authorization: Bearer am_live_Kx8mN2pQrS..." \
   -H "Content-Type: application/json" \
   -d '{"url": "https://your-agent.com/webhook/email"}'</pre>
